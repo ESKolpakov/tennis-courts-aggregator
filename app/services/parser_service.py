@@ -1,4 +1,5 @@
-from app.parsers.yclients_parser import YClientsParser
+import asyncio
+from app.parsers.yclients_adv_parser import YClientsAdvParser
 from app.parsers.findsport_parser import FindSportParser
 from app.parsers.tsaritsyno_parser import TsaritsynoParser
 from app.models import TennisCourt
@@ -14,7 +15,7 @@ class ParserService:
         
         # Список парсеров
         self.parsers = [
-            YClientsParser(),
+            YClientsAdvParser(),
             FindSportParser(),
             TsaritsynoParser()
         ]
@@ -30,15 +31,15 @@ class ParserService:
             self.logger.addHandler(handler)
             self.logger.setLevel(logging.INFO)
     
-    def parse_all_clubs(self):
-        """Парсинг данных со всех клубов"""
+    async def parse_all_clubs(self):
+        """Асинхронный парсинг данных со всех клубов"""
         self.logger.info("=== Начало парсинга всех клубов ===")
         all_data = []
         
         for parser in self.parsers:
             try:
                 self.logger.info(f"Парсинг клуба: {parser.club_name}")
-                club_data = parser.get_courts_data()
+                club_data = await parser.get_courts_data()
                 
                 if club_data:
                     all_data.extend(club_data)
@@ -58,15 +59,12 @@ class ParserService:
         self.logger.info("=== Начало сохранения данных в БД ===")
         
         try:
-            # Создаем новый контекст приложения
+            # Создаем контекст приложения, если его нет
             if app is None:
                 from app import create_app
                 app = create_app()
             
             with app.app_context():
-                # Очищаем старые данные (опционально, можно оставить историю)
-                # db.session.query(TennisCourt).delete()
-                
                 saved_count = 0
                 for record in data:
                     try:
@@ -91,11 +89,11 @@ class ParserService:
                             # Обновляем существующую запись
                             existing.status = record['status']
                             existing.updated_at = datetime.utcnow()
+                            saved_count += 1
                         else:
                             # Добавляем новую запись
                             db.session.add(court)
-                        
-                        saved_count += 1
+                            saved_count += 1
                     
                     except Exception as e:
                         self.logger.error(f"Ошибка при сохранении записи {record}: {str(e)}")
@@ -110,13 +108,13 @@ class ParserService:
             self.logger.error(f"Ошибка при сохранении в БД: {str(e)}")
             raise
     
-    def update_all_data(self, app=None):
+    async def update_all_data(self, app=None):
         """Полный цикл: парсинг + сохранение"""
         self.logger.info("=== Запуск полного обновления данных ===")
         
         try:
             # Получаем данные
-            data = self.parse_all_clubs()
+            data = await self.parse_all_clubs()
             
             if data:
                 # Сохраняем в БД

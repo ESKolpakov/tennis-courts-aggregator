@@ -4,6 +4,7 @@ from app.models import TennisCourt
 from app import db
 from datetime import datetime, timedelta
 import threading
+import asyncio
 
 main_bp = Blueprint('main', __name__)
 
@@ -29,6 +30,32 @@ def index():
     
     return render_template('index.html', courts=courts, update_status=update_status)
 
+def update_task(app):
+    """Функция для выполнения в отдельном потоке с передачей приложения"""
+    global update_status
+    update_status['is_updating'] = True
+    update_status['error'] = None
+    
+    try:
+        with app.app_context():
+            service = ParserService(app)
+            
+            # Создаем новый event loop для асинхронного вызова
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            
+            # Запускаем асинхронную задачу
+            saved_count = loop.run_until_complete(service.update_all_data(app))
+            
+            update_status['last_update'] = datetime.now()
+            update_status['is_updating'] = False
+            
+            return saved_count
+    except Exception as e:
+        update_status['error'] = str(e)
+        update_status['is_updating'] = False
+        raise
+
 @main_bp.route('/update', methods=['POST'])
 def update_data():
     """Маршрут для обновления данных"""
@@ -40,31 +67,12 @@ def update_data():
             'message': 'Обновление уже выполняется'
         }), 400
     
-    def update_task():
-        global update_status
-        update_status['is_updating'] = True
-        update_status['error'] = None
-        
-        try:
-            # Создаем новое приложение для потока
-            from app import create_app
-            app = create_app()
-            
-            with app.app_context():
-                service = ParserService(app)
-                saved_count = service.update_all_data(app)
-                
-                update_status['last_update'] = datetime.now()
-                update_status['is_updating'] = False
-                
-                return saved_count
-        except Exception as e:
-            update_status['error'] = str(e)
-            update_status['is_updating'] = False
-            raise
+    # Создаем новое приложение для потока
+    from app import create_app
+    app = create_app()
     
-    # Запускаем обновление в отдельном потоке
-    thread = threading.Thread(target=update_task)
+    # Запускаем обновление в отдельном потоке с передачей приложения
+    thread = threading.Thread(target=update_task, args=(app,))
     thread.start()
     
     return jsonify({
@@ -98,7 +106,7 @@ def get_data():
         TennisCourt.court_number
     ).all()
     
-    # Форматируем данные для JSON с правильными полями
+    # Форматируем данные для JSON
     data = []
     for court in courts:
         data.append({
